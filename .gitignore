@@ -1,6 +1,14 @@
 # Prerequisites
 *.d
 
+# CMake generated files
+build/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+
 # Compiled Object files
 *.slo
 *.lo
@@ -39,3 +47,5 @@
 
 # debug information files
 *.dwo
+
+build/**
