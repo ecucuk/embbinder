@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-Wall -Wextra -Werror"
+
+      - name: Build
+        run: cmake --build build -j4
+
+      - name: Test
+        working-directory: build
+        run: ctest --output-on-failure
+
+      - name: Example
+        run: ./build/basic_service | grep -q "Result = 30"
+
+  format:
+    runs-on: macos-latest # Homebrew clang-format matches the version used locally
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install clang-format
+      - run: clang-format --dry-run --Werror $(git ls-files '*.cpp' '*.hpp')

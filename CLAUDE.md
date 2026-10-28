@@ -13,7 +13,7 @@ scripts/format.sh                        # clang-format -i (LLVM style, .clang-f
 scripts/lint.sh                          # clang-tidy over src/ and examples/
 ```
 
-In-source builds are rejected by CMake. Tests are plain executables using `CHECK` from `tests/check.hpp` (no framework). Use the `verifying-changes` skill before calling work done.
+In-source builds are rejected by CMake. CI (`.github/workflows/ci.yml`) builds with `-Werror` on Ubuntu (gcc) and macOS (clang), runs ctest, and checks clang-format. Tests are plain executables using `CHECK` from `tests/check.hpp` (no framework). Use the `verifying-changes` skill before calling work done.
 
 ## Layout
 
