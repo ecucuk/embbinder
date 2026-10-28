@@ -24,6 +24,7 @@ enum class MsgType : uint16_t {
   Request = 1,
   Response = 2,
   Event = 3,
+  Error = 4, // payload: uint32 little-endian ErrorCode
 };
 
 struct MessageHeader {

@@ -8,7 +8,7 @@
 #ifndef EMBBINDER_CORE_REGISTRY_HPP
 #define EMBBINDER_CORE_REGISTRY_HPP
 
-#include "dispatcher.hpp"
+#include "service.hpp"
 #include <map>
 #include <memory>
 #include <mutex>
@@ -35,8 +35,7 @@ private:
   ServiceRegistry(const ServiceRegistry &) = delete;
   ServiceRegistry &operator=(const ServiceRegistry &) = delete;
 
-  // We can use the simple array-based approach from Dispatcher or a Map.
-  // Since this is C++, let's use std::map for flexibility unless constrained.
+  // std::map rather than a fixed array for flexibility.
   // Note: In embedded, map might be heavy, but we are designing generic C++
   // core.
   std::map<uint32_t, IService *> m_services_by_id;

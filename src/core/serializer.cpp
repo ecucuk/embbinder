@@ -92,7 +92,7 @@ template <typename T> Result<T> Serializer::read_pod() {
   const uint8_t *base = m_external_buffer ? m_external_buffer : m_buffer.data();
   size_t total_size = m_external_buffer ? m_external_size : m_buffer.size();
 
-  if (m_read_pos + sizeof(T) > total_size) {
+  if (sizeof(T) > total_size - m_read_pos) {
     return ErrorCode::BUFFER_TOO_SMALL;
   }
 
@@ -125,7 +125,7 @@ Result<std::string> Serializer::read_string() {
   const uint8_t *base = m_external_buffer ? m_external_buffer : m_buffer.data();
   size_t total_size = m_external_buffer ? m_external_size : m_buffer.size();
 
-  if (m_read_pos + len > total_size) {
+  if (len > total_size - m_read_pos) {
     return ErrorCode::BUFFER_TOO_SMALL;
   }
 

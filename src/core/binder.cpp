@@ -7,6 +7,8 @@
 
 #include "embbinder/core/binder.hpp"
 #include "embbinder/core/message.hpp"
+#include "embbinder/utils/byteorder.hpp"
+#include <algorithm>
 #include <cstring>
 
 namespace embbinder::core {
@@ -30,7 +32,7 @@ Result<void> Binder::process_message(const uint8_t *input_buffer,
                                      uint32_t &output_size) {
   output_size = 0;
 
-  if (!input_buffer || input_size < sizeof(MessageHeader)) {
+  if (!input_buffer || !output_buffer || input_size < sizeof(MessageHeader)) {
     return ErrorCode::INVALID_ARGUMENT;
   }
 
@@ -44,7 +46,8 @@ Result<void> Binder::process_message(const uint8_t *input_buffer,
 
   // TODO: Check version compatibility
 
-  if (header.payload_size + sizeof(MessageHeader) > input_size) {
+  // Subtract instead of add: payload_size + header can wrap on 32-bit size_t
+  if (header.payload_size > input_size - sizeof(MessageHeader)) {
     return ErrorCode::BUFFER_TOO_SMALL; // Incomplete message
   }
 
@@ -53,8 +56,8 @@ Result<void> Binder::process_message(const uint8_t *input_buffer,
   IService *service =
       ServiceRegistry::instance().get_service(header.service_id);
   if (!service) {
-    send_error_response(header.request_id, ErrorCode::SERVICE_NOT_FOUND,
-                        output_buffer, output_capacity, output_size);
+    send_error_response(header, ErrorCode::SERVICE_NOT_FOUND, output_buffer,
+                        output_capacity, output_size);
     return ErrorCode::SERVICE_NOT_FOUND;
   }
 
@@ -65,13 +68,19 @@ Result<void> Binder::process_message(const uint8_t *input_buffer,
   }
 
   uint8_t *resp_payload_ptr = output_buffer + sizeof(MessageHeader);
-  uint32_t resp_payload_cap =
-      static_cast<uint32_t>(output_capacity - sizeof(MessageHeader));
+  uint32_t resp_payload_cap = static_cast<uint32_t>(
+      std::min<size_t>(output_capacity - sizeof(MessageHeader), UINT32_MAX));
   uint32_t resp_payload_size = 0;
 
   // Dispatch
   service->handle(header.method_id, payload, header.payload_size,
-                  resp_payload_ptr, resp_payload_size);
+                  resp_payload_ptr, resp_payload_cap, resp_payload_size);
+
+  if (resp_payload_size > resp_payload_cap) {
+    send_error_response(header, ErrorCode::INTERNAL_ERROR, output_buffer,
+                        output_capacity, output_size);
+    return ErrorCode::INTERNAL_ERROR;
+  }
 
   // Construct response header
   MessageHeader resp_header;
@@ -89,10 +98,12 @@ Result<void> Binder::process_message(const uint8_t *input_buffer,
   return Result<void>();
 }
 
-void Binder::send_error_response(uint32_t request_id, ErrorCode error,
+void Binder::send_error_response(const MessageHeader &request, ErrorCode error,
                                  uint8_t *out_buf, size_t out_cap,
                                  uint32_t &out_size) {
-  if (out_cap < sizeof(MessageHeader)) {
+  uint32_t code =
+      utils::ByteOrder::to_little_endian(static_cast<uint32_t>(error));
+  if (out_cap < sizeof(MessageHeader) + sizeof(code)) {
     out_size = 0;
     return;
   }
@@ -100,25 +111,15 @@ void Binder::send_error_response(uint32_t request_id, ErrorCode error,
   MessageHeader resp_header;
   resp_header.magic = kMagic;
   resp_header.version = kVersion;
-  resp_header.type = static_cast<uint16_t>(MsgType::Response); // Or Error type?
-  // Using high bit of type or specific error code in payload?
-  // For simplicity, let's treat it as a response with 0 payload but maybe a
-  // specific flag or we need an error field. The current MessageHeader doesn't
-  // have an error code field. We could use method_id = 0xFFFFFFFF or similar as
-  // convention, or payload contains error info.
-
-  // Let's assume payload contains error code as int32 if type indicates error,
-  // but we don't have Error type defined in Message.hpp yet. Let's modify
-  // Message.hpp later to include Error type or status.
-
-  // For now, minimal valid header.
-  resp_header.service_id = 0;
-  resp_header.method_id = 0;
-  resp_header.request_id = request_id;
-  resp_header.payload_size = 0;
+  resp_header.type = static_cast<uint16_t>(MsgType::Error);
+  resp_header.service_id = request.service_id;
+  resp_header.method_id = request.method_id;
+  resp_header.request_id = request.request_id;
+  resp_header.payload_size = sizeof(code);
 
   std::memcpy(out_buf, &resp_header, sizeof(MessageHeader));
-  out_size = sizeof(MessageHeader);
+  std::memcpy(out_buf + sizeof(MessageHeader), &code, sizeof(code));
+  out_size = sizeof(MessageHeader) + sizeof(code);
 }
 
 } // namespace embbinder::core

@@ -9,13 +9,12 @@ graph TD
     UserApp --> Binder[Binder Core]
     
     subgraph "Core Layer"
-        Binder --> Dispatcher
-        Binder --> Registry[Service Registry]
-        Dispatcher --> |Looks up| Registry
+        Endpoint --> Binder
+        Binder --> |Looks up| Registry[Service Registry]
     end
     
     subgraph "Porting Layer"
-        Binder --> Port[Port Interface (OS/HW)]
+        Endpoint --> Port[Port Interface (OS/HW)]
     end
 
     subgraph "Transport"
@@ -40,12 +39,12 @@ All user services must inherit from `IService`. This interface defines a pure vi
 ```cpp
 virtual void handle(uint32_t method_id, const uint8_t *payload,
                     uint32_t payload_size, uint8_t *response_buf,
-                    uint32_t &response_size) = 0;
+                    uint32_t response_capacity, uint32_t &response_size) = 0;
 ```
-Services implement this method to deserialized arguments, execute logic, and serialize responses.
+Services implement this method to deserialize arguments, execute logic, and serialize responses. A service must never write more than `response_capacity` bytes; `Binder` rejects a larger `response_size` with an `Error` message.
 
-### 4. Dispatcher
-The `Dispatcher` parses the `MessageHeader`, identifies the target service and method, and invokes the service's handler. It also handles error reporting if a service or method is not found.
+### 4. Endpoint
+`Endpoint` owns a port `Transport`, reads one message per `poll()`, passes it to `Binder::process_message`, and sends back the response — including `Error` responses for unknown services.
 
 ### 5. Serializer
 A helper class to safely serialize and deserialize primitive types (int, float, string) and raw buffers into/from a byte stream. It handles endianness (if implemented) and buffer bounds checking.

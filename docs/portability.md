@@ -67,4 +67,4 @@ struct Logger {
 
 ### Example: POSIX Port
 
-If you look at `src/ports/posix/`, you will see how these are implemented using `pthread`, `usleep`, and standard socket APIs.
+`src/ports/posix/` implements these with `pthread`, `poll` and Unix domain sockets. On Unix it is built as the `embbinder_port_posix` library; link it next to `embbinder_core`. The `Logger` is provided by the core (`src/core/log_port.cpp`), so ports must not define it.

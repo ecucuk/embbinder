@@ -24,7 +24,7 @@ The header is defined in `embbinder::core::MessageHeader`. All fields are distin
 |--------|--------------|--------------|--------------------------------------------------|
 | 0      | `magic`      | 4            | Magic Value: `0x454D4242` ('EMBB')               |
 | 4      | `version`    | 2            | Protocol Version (Currently 1)                   |
-| 6      | `type`       | 2            | Message Type (1=Request, 2=Response, 3=Event)    |
+| 6      | `type`       | 2            | Message Type (1=Request, 2=Response, 3=Event, 4=Error) |
 | 8      | `service_id` | 4            | ID of the target service                         |
 | 12     | `method_id`  | 4            | ID of the method to invoke                       |
 | 16     | `payload_size`| 4           | Length of the payload in bytes                   |
@@ -35,6 +35,13 @@ The header is defined in `embbinder::core::MessageHeader`. All fields are distin
 - **Request (1)**: A client asking a service to perform an action.
 - **Response (2)**: A service replying to a client's request.
 - **Event (3)**: An asynchronous notification from a service.
+- **Error (4)**: The request failed before or inside the service. `service_id`, `method_id` and `request_id` are copied from the request; the payload is a 4-byte little-endian `ErrorCode` (e.g. `SERVICE_NOT_FOUND`).
+
+Malformed input (wrong magic, `payload_size` larger than the received bytes) gets no reply.
+
+## Framing on stream transports
+
+Stream transports (UDS, TCP, UART) must deliver whole messages: read the 24-byte header, then exactly `payload_size` bytes. The POSIX UDS transport does this and drops the connection when `payload_size` exceeds the receive buffer.
 
 ## Payload Serialization
 

@@ -24,7 +24,8 @@ public:
   enum Methods { ADD = 1, SUBTRACT = 2, MULTIPLY = 3, DIVIDE = 4 };
 
   void handle(uint32_t method_id, const uint8_t *payload, uint32_t payload_size,
-              uint8_t *response_buf, uint32_t &response_size) override {
+              uint8_t *response_buf, uint32_t response_capacity,
+              uint32_t &response_size) override {
 
     Serializer req;
     req.attach_buffer(payload, payload_size);
@@ -75,6 +76,9 @@ public:
     }
     }
     resp.write_int32(result);
+    if (resp.size() > response_capacity) {
+      return;
+    }
     std::memcpy(response_buf, resp.data(), resp.size());
     response_size = static_cast<uint32_t>(resp.size());
   }

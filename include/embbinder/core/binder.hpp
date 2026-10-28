@@ -8,10 +8,11 @@
 #ifndef EMBBINDER_CORE_BINDER_HPP
 #define EMBBINDER_CORE_BINDER_HPP
 
-#include "dispatcher.hpp"
+#include "message.hpp"
 #include "registry.hpp"
 #include "result.hpp"
 #include "serializer.hpp"
+#include "service.hpp"
 #include <cstddef>
 #include <cstdint>
 
@@ -67,8 +68,8 @@ private:
   Binder(const Binder &) = delete;
   Binder &operator=(const Binder &) = delete;
 
-  // Helper to send error response
-  void send_error_response(uint32_t request_id, ErrorCode error,
+  // Writes an MsgType::Error message (payload: uint32 LE ErrorCode)
+  void send_error_response(const MessageHeader &request, ErrorCode error,
                            uint8_t *out_buf, size_t out_cap,
                            uint32_t &out_size);
 };

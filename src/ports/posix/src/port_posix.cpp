@@ -31,40 +31,7 @@ void *Memory::alloc(size_t size) { return std::malloc(size); }
 
 void Memory::free(void *ptr) { std::free(ptr); }
 
-// --- Logger ---
-
-static LogFunction g_log_function = nullptr;
-
-void Logger::set_log_function(LogFunction func) { g_log_function = func; }
-
-void Logger::log(LogLevel level, const char *tag, const char *message) {
-  if (g_log_function) {
-    g_log_function(level, tag, message);
-  } else {
-    // Default implementation
-    const char *level_str = "UNK";
-    switch (level) {
-    case LogLevel::DEBUG:
-      level_str = "DBG";
-      break;
-    case LogLevel::INFO:
-      level_str = "INF";
-      break;
-    case LogLevel::WARNING:
-      level_str = "WRN";
-      break;
-    case LogLevel::ERROR:
-      level_str = "ERR";
-      break;
-    case LogLevel::FATAL:
-      level_str = "FTL";
-      break;
-    default:
-      break;
-    }
-    std::printf("[%s] [%s] %s\n", level_str, tag, message);
-  }
-}
+// Logger lives in src/core/log_port.cpp.
 
 // --- Mutex ---
 
