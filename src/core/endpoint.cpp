@@ -79,8 +79,9 @@ embbinder::core::Result<bool> Endpoint::poll(time_ms_t timeout_ms) {
       m_rx_buffer.data(), received_size, m_tx_buffer.data(), m_tx_buffer.size(),
       response_size);
 
-  if (binder_res.is_ok() && response_size > 0) {
-    // Send response
+  // Error responses (e.g. SERVICE_NOT_FOUND) are sent too, so clients don't
+  // wait forever.
+  if (response_size > 0) {
     auto send_res = Transport::send(m_transport, m_tx_buffer.data(),
                                     response_size, 1000); // 1s timeout for send
     if (send_res != embbinder::port::Result::SUCCESS) {
@@ -89,6 +90,9 @@ embbinder::core::Result<bool> Endpoint::poll(time_ms_t timeout_ms) {
     }
   }
 
+  if (binder_res.is_error()) {
+    return binder_res.error();
+  }
   return true;
 }
 

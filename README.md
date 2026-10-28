@@ -18,10 +18,10 @@
 
 The project is organized as follows:
 
-- **`include/embbinder/core`**: Core logic (Binder, Registry, Dispatcher, Serializer).
+- **`include/embbinder/core`**: Core logic (Binder, Registry, IService, Serializer, Endpoint).
 - **`include/embbinder/port`**: Platform-specific porting layer.
 - **`include/embbinder/utils`**: Utility classes (Span, StaticVector, ByteOrder).
-- **`src`**: Implementation files.
+- **`src`**: Implementation files; `src/ports/posix` is built as `embbinder_port_posix` on Unix.
 - **`examples`**: Usage examples.
 - **`tests`**: Unit tests.
 
@@ -53,6 +53,11 @@ This project uses CMake for building.
    make
    ```
 
+4. Run the tests:
+   ```bash
+   ctest --output-on-failure
+   ```
+
 ## Usage
 
 Here is a basic example of how to define a service and invoke its methods.
@@ -72,23 +77,25 @@ public:
     enum Methods { ADD = 1 };
 
     void handle(uint32_t method_id, const uint8_t *payload, uint32_t payload_size,
-                uint8_t *response_buf, uint32_t &response_size) override {
-        
-        Serializer req;
-        // Assuming payload contains two int32_t
-        req.attach_buffer(payload, payload_size);
-        
-        int32_t a = req.read_int32().value();
-        int32_t b = req.read_int32().value();
-        int32_t result = 0;
+                uint8_t *response_buf, uint32_t response_capacity,
+                uint32_t &response_size) override {
+        if (method_id != ADD) {
+            return; // response_size stays 0
+        }
 
-        if (method_id == ADD) {
-            result = a + b;
+        Serializer req;
+        req.attach_buffer(payload, payload_size);
+        auto a = req.read_int32();
+        auto b = req.read_int32();
+        if (!a.is_ok() || !b.is_ok()) {
+            return;
         }
 
         Serializer resp;
-        resp.write_int32(result);
-        
+        resp.write_int32(a.value() + b.value());
+        if (resp.size() > response_capacity) {
+            return;
+        }
         std::memcpy(response_buf, resp.data(), resp.size());
         response_size = static_cast<uint32_t>(resp.size());
     }
