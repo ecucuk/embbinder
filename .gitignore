@@ -56,3 +56,6 @@ build/**
 .claude/worktrees/
 .claude/settings.local.json
 /basic_service
+
+# Rust
+/target
