@@ -7,6 +7,7 @@ use embbinder::{
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
+use std::sync::Mutex;
 
 type Received = Result<Vec<u8>, TransportError>;
 
@@ -159,4 +160,27 @@ fn send_uses_one_second_timeout() {
     let transport = ScriptedTransport::default();
     poll_once(&transport, Ok(request(1))).unwrap();
     assert_eq!(transport.0.borrow().send_timeouts, [1000]);
+}
+
+struct NullTransport;
+
+impl Transport for NullTransport {
+    fn send(&mut self, _: &[u8], _: u64) -> Result<(), TransportError> {
+        Ok(())
+    }
+
+    fn receive(&mut self, _: &mut [u8], _: u64) -> Result<usize, TransportError> {
+        Err(TransportError::Timeout)
+    }
+}
+
+static STATIC_BINDER: Mutex<Binder<'static, 2>> = Mutex::new(Binder::new());
+static STATIC_ENDPOINT: Mutex<Endpoint<NullTransport, 4096>> =
+    Mutex::new(Endpoint::new(NullTransport));
+
+#[test]
+fn binder_and_endpoint_work_in_statics() {
+    let mut binder = STATIC_BINDER.lock().unwrap();
+    let mut endpoint = STATIC_ENDPOINT.lock().unwrap();
+    assert_eq!(endpoint.poll(&mut binder, 0), Ok(false));
 }

@@ -6,13 +6,20 @@
 
 use crate::{MessageHeader, Transport, TransportError};
 use std::fs;
-use std::io::{ErrorKind, Read, Write};
+use std::io::{self, ErrorKind, Read};
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::time::Duration;
 
 /// After the first byte of a frame, the rest must arrive within this time.
 const FRAME_TIMEOUT_MS: u64 = 1000;
+
+/// `std` sets `SO_NOSIGPIPE` on Apple sockets, which have no `MSG_NOSIGNAL`.
+#[cfg(target_vendor = "apple")]
+const SEND_FLAGS: libc::c_int = 0;
+#[cfg(not(target_vendor = "apple"))]
+const SEND_FLAGS: libc::c_int = libc::MSG_NOSIGNAL;
 
 /// A server or client end of a Unix domain socket.
 pub struct UdsTransport {
@@ -72,21 +79,35 @@ impl UdsTransport {
 
 impl Transport for UdsTransport {
     fn send(&mut self, data: &[u8], timeout_ms: u64) -> Result<(), TransportError> {
-        let conn = self.conn.as_mut().ok_or(TransportError::Internal)?;
+        let conn = self.conn.as_ref().ok_or(TransportError::Internal)?;
         let fd = conn.as_raw_fd();
+        // A zero duration is an error, so the shortest wait is 1 ms.
+        let timeout = Duration::from_millis(timeout_ms.max(1));
+        if conn.set_write_timeout(Some(timeout)).is_err() {
+            // macOS rejects this call when the peer has closed.
+            self.drop_connection();
+            return Err(TransportError::Internal);
+        }
+
         let mut rest = data;
         while !rest.is_empty() {
-            wait_fd(fd, libc::POLLOUT, timeout_ms)?;
-            // shortcut: relies on the Rust runtime ignoring SIGPIPE, upgrade to MSG_NOSIGNAL if a non-Rust host links this.
-            let size = match conn.write(rest) {
-                Ok(size) if size > 0 => size,
-                Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            match send_once(fd, rest) {
+                Ok(size) if size > 0 => rest = &rest[size..],
+                Err(error) if error.kind() == ErrorKind::Interrupted => {}
+                Err(error)
+                    if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) =>
+                {
+                    // The stream is in sync only if no byte of the frame left.
+                    if rest.len() < data.len() {
+                        self.drop_connection();
+                    }
+                    return Err(TransportError::Timeout);
+                }
                 _ => {
                     self.drop_connection();
                     return Err(TransportError::Internal);
                 }
-            };
-            rest = &rest[size..];
+            }
         }
         Ok(())
     }
@@ -143,6 +164,14 @@ fn read_exact(conn: &mut UnixStream, buf: &mut [u8]) -> Result<(), TransportErro
     Ok(())
 }
 
+/// Sends once. `std` writes can raise `SIGPIPE` on Linux.
+#[allow(unsafe_code)]
+fn send_once(fd: RawFd, data: &[u8]) -> io::Result<usize> {
+    // SAFETY: `data` is valid for `data.len()` bytes during the call.
+    let sent = unsafe { libc::send(fd, data.as_ptr().cast(), data.len(), SEND_FLAGS) };
+    usize::try_from(sent).map_err(|_| io::Error::last_os_error())
+}
+
 /// Waits for `events` on `fd`. `UnixListener` has no accept timeout, so the
 /// transport needs `poll(2)`.
 #[allow(unsafe_code)]
@@ -159,7 +188,7 @@ fn wait_fd(fd: RawFd, events: i16, timeout_ms: u64) -> Result<(), TransportError
         match ready {
             0 => return Err(TransportError::Timeout),
             1.. => return Ok(()),
-            _ if std::io::Error::last_os_error().kind() == ErrorKind::Interrupted => {}
+            _ if io::Error::last_os_error().kind() == ErrorKind::Interrupted => {}
             _ => return Err(TransportError::Internal),
         }
     }

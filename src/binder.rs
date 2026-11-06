@@ -42,9 +42,9 @@ impl<const N: usize> Default for Binder<'_, N> {
 
 impl<'a, const N: usize> Binder<'a, N> {
     /// Creates a binder with no services.
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
-            slots: core::array::from_fn(|_| None),
+            slots: [const { None }; N],
         }
     }
 

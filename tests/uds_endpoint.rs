@@ -7,6 +7,8 @@ use embbinder::{
 };
 use std::fs;
 use std::os::unix::net::UnixListener;
+use std::sync::mpsc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 const MAX_MESSAGE: usize = 256;
@@ -220,6 +222,33 @@ fn client_gone_before_reply_gives_error() {
     );
 
     assert_serves_new_client(&path, &mut endpoint, &mut binder);
+}
+
+#[test]
+fn send_to_client_that_does_not_read_times_out() {
+    let path = TestPath::new("no_read");
+    let mut server = UdsTransport::open(&path.0).unwrap();
+    let mut peer = client(&path);
+
+    // Accept the peer and leave it connected with nothing read.
+    peer.send(&request(1, 8), 1000).unwrap();
+    let mut buf = [0u8; MAX_MESSAGE];
+    server.receive(&mut buf, 1000).unwrap();
+
+    // The thread lets the test fail, not hang, if send blocks.
+    let (done, result) = mpsc::channel();
+    thread::spawn(move || {
+        let outcome = server.send(&vec![0u8; 1 << 24], 200);
+        let _ = done.send((outcome, server));
+    });
+    let (outcome, mut server) = result
+        .recv_timeout(Duration::from_secs(5))
+        .expect("send did not obey its timeout");
+    assert_eq!(outcome, Err(TransportError::Timeout));
+
+    // A partial frame cannot continue, so the server dropped the peer.
+    assert_eq!(server.send(&[0], 200), Err(TransportError::Internal));
+    drop(peer);
 }
 
 #[test]

@@ -27,6 +27,7 @@ version on little-endian hosts.
 | Crates | One crate, `default = ["std"]` | Only one optional module needs `std`. |
 | Logging | `log` crate | It works with `no_std` and no heap. It replaces `port::Logger`. |
 | Socket wait | `libc::poll` under `std` | `UnixListener` has no accept timeout. `poll(2)` keeps the C++ behaviour. |
+| Socket send | `libc::send` with `MSG_NOSIGNAL`, and `set_write_timeout` | A `std` write can raise `SIGPIPE` on Linux. macOS ignores `MSG_DONTWAIT` on `send`. |
 
 Rejected options:
 
@@ -69,8 +70,8 @@ flowchart LR
 | `tests/uds_endpoint.rs` | Port of `tests/test_uds_endpoint.cpp` |
 | `tests/wire_format.rs` | Golden bytes from the C++ build |
 
-`unsafe` is forbidden in the crate, except for the single `libc::poll` call in
-`src/uds.rs`.
+`unsafe` is forbidden in the crate, except for the `libc::poll` and `libc::send`
+calls in `src/uds.rs`.
 
 ## Public API
 
@@ -190,6 +191,9 @@ An Error reply needs 28 bytes of `output`. If `output` is smaller, `reply_size` 
 8. The registry has no lock. A multi-threaded application puts the `Binder` in
    its own mutex. `Service: Send` makes this possible. A service that holds a
    raw pointer needs its own `unsafe impl Send`.
+9. `UdsTransport` sends obey the timeout. C++ could block for as long as a peer
+   did not read. A timeout after part of a frame left drops a server peer,
+   because the stream is then out of sync.
 
 ## Behaviour that stays the same
 

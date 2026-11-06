@@ -30,8 +30,8 @@ CI (`.github/workflows/ci.yml`) runs all of these on Ubuntu and macOS. Use the `
 - `Service: Send` lets an application put a `Binder` in a mutex. The crate has no lock of its own.
 - `ProcessError.reply_size > 0` means an Error reply is in the output buffer. `Endpoint::poll` sends it and then returns the code.
 - `Endpoint::poll` gives `Ok(false)` when no message arrived. Check the `bool`, not only `is_ok()`.
-- `unsafe` is denied in the crate. The only exception is the `libc::poll` call in `src/uds.rs`.
-- `UdsTransport` relies on the Rust runtime ignoring `SIGPIPE`. A non-Rust host needs `MSG_NOSIGNAL`.
+- `unsafe` is denied in the crate. The only exceptions are the `libc::poll` and `libc::send` calls in `src/uds.rs`.
+- `UdsTransport` uses `libc::send`, not `std` writes: a `std` write can raise `SIGPIPE` on Linux. `set_write_timeout` bounds the send, because macOS ignores `MSG_DONTWAIT` on `send`.
 - Test socket paths go in `/tmp`, because a long repository path can exceed `sun_path`.
 
 ## Wire format invariants

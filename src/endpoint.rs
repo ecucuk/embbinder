@@ -16,7 +16,7 @@ pub struct Endpoint<T: Transport, const M: usize> {
 
 impl<T: Transport, const M: usize> Endpoint<T, M> {
     /// Creates an endpoint that uses `transport`.
-    pub fn new(transport: T) -> Self {
+    pub const fn new(transport: T) -> Self {
         const { assert!(M >= MessageHeader::SIZE, "M is smaller than a header") };
         Self {
             transport,
