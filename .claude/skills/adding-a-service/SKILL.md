@@ -1,50 +1,42 @@
 ---
 name: adding-a-service
-description: Use when implementing or changing an EmbBinder IService, adding a method id, or writing client code that builds request messages for a service.
+description: Use when implementing or changing an EmbBinder Service, adding a method id, or writing client code that builds request messages for a service.
 ---
 
 # Adding an EmbBinder service
 
-A service is an `embbinder::core::IService` registered with `Binder::instance().register_service(id, &svc)`. The payload is untrusted bytes from a transport.
+A service implements `embbinder::Service` and is registered with `binder.register_service(id, &mut service)`. The payload is untrusted bytes from a transport.
 
 ## Handler rules
 
-```cpp
-void handle(uint32_t method_id, const uint8_t *payload, uint32_t payload_size,
-            uint8_t *response_buf, uint32_t response_capacity,
-            uint32_t &response_size) override {
-  if (method_id != ADD) {
-    return;                                   // unknown method: response_size stays 0
-  }
-  Serializer req;
-  req.attach_buffer(payload, payload_size);   // non-owning, no copy
+```rust
+fn handle(
+    &mut self,
+    method_id: u32,
+    payload: &[u8],
+    response: &mut [u8],
+) -> Result<usize, ErrorCode> {
+    if method_id != ADD {
+        return Err(ErrorCode::MethodNotFound);
+    }
+    let mut request = Reader::new(payload);       // no copy
+    let sum = request.read_i32()?.wrapping_add(request.read_i32()?);
 
-  auto a = req.read_int32();
-  auto b = req.read_int32();
-  if (!a.is_ok() || !b.is_ok()) {
-    return;                                   // response_size stays 0
-  }
-
-  Serializer resp;
-  resp.write_int32(a.value() + b.value());
-  if (resp.size() > response_capacity) {
-    return;
-  }
-  std::memcpy(response_buf, resp.data(), resp.size());
-  response_size = static_cast<uint32_t>(resp.size());
+    let mut writer = Writer::new(response);
+    writer.write_i32(sum)?;
+    Ok(writer.len())
 }
 ```
 
-- Check every `read_*()` result. `value()` on an error returns `0`/empty silently.
-- Never write more than `response_capacity` bytes. Reporting a larger `response_size` makes `Binder` reply with `MsgType::Error` / `INTERNAL_ERROR`.
-- Unknown `method_id` → leave `response_size = 0`.
+- Propagate read and write errors with `?`. `Err` sends an Error reply to the client.
+- Do not panic on client input: use wrapping or checked arithmetic, and do not `unwrap`.
 - Read fields in exactly the order the client wrote them; there are no tags or padding.
-- Service ids must be unique: `register_service` returns `false` on duplicates — check it.
-- The registry stores a raw pointer. The service must outlive its registration (`ServiceRegistry::remove_service`).
+- Service ids must be unique: `register_service` gives `InvalidOperation` on duplicates and `OutOfMemory` when `N` slots are full — check it.
+- The `Binder` holds `&mut` to the service, so the compiler makes the service outlive the `Binder`.
 
 ## Client side
 
-Build the header like `examples/basic_service.cpp`: `magic = kMagic`, `version = kVersion`, `type = MsgType::Request`, `payload_size = serializer.size()`, then header bytes + payload bytes in one buffer. Handle both reply types: `Response`, and `Error` with a uint32 LE `ErrorCode` payload.
+Build the header like `examples/basic_service.rs`: `magic: MAGIC`, `version: VERSION`, `msg_type: MsgType::Request as u16`, `payload_size` from `Writer::len()`, then `to_bytes()` and the payload in one buffer. Handle both reply types: `Response`, and `Error` with a `u32` LE `ErrorCode` payload.
 
 ## Done
 

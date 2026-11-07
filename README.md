@@ -1,152 +1,96 @@
 # EmbBinder
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Standard](https://img.shields.io/badge/c%2B%2B-17-blue.svg)
+![Language](https://img.shields.io/badge/rust-2024-blue.svg)
 
-**EmbBinder** is a lightweight, high-performance RPC/Binder mechanism designed specifically for embedded systems. It facilitates seamless communication between different software components or processes with minimal overhead.
+**EmbBinder** is a lightweight RPC/Binder library for embedded systems. A request is a 24-byte header and a payload. `Binder` finds a `Service` by its ID and calls `handle()`.
 
 ## Features
 
-- **Lightweight & Efficient**: Optimized for resource-constrained environments.
-- **C++17 Standard**: leveraging modern C++ features for safety and expressiveness.
-- **Zero-Copy Friendly**: Utilizes `Span` and `StaticVector` to minimize memory allocations.
-- **Easy Integration**: Simple `IService` interface for quick service implementation.
-- **Robust Serialization**: Built-in `Serializer` for handling primitive types and buffers.
-- **Modular Architecture**: Clean separation between core logic, porting layer, and utilities.
+- **`no_std`, no heap**: The core runs on a microcontroller with no allocator.
+- **No global state**: The application owns the `Binder`, the services and the buffers.
+- **Zero copy**: `Reader` and `Writer` operate on caller buffers. `read_string` returns a `&str` into the payload.
+- **Portable**: A platform implements the `Transport` trait.
+- **Unix domain sockets**: `UdsTransport` is available with the `std` feature.
 
 ## Project Structure
 
-The project is organized as follows:
-
-- **`include/embbinder/core`**: Core logic (Binder, Registry, IService, Serializer, Endpoint).
-- **`include/embbinder/port`**: Platform-specific porting layer.
-- **`include/embbinder/utils`**: Utility classes (Span, StaticVector, ByteOrder).
-- **`src`**: Implementation files; `src/ports/posix` is built as `embbinder_port_posix` on Unix.
-- **`examples`**: Usage examples.
-- **`tests`**: Unit tests.
+- **`src/message.rs`**: Wire header, `MsgType`, `MAGIC`, `VERSION`.
+- **`src/error.rs`**: `ErrorCode`.
+- **`src/serializer.rs`**: `Writer` and `Reader`.
+- **`src/binder.rs`**: `Service`, `Binder`, `ProcessError`.
+- **`src/transport.rs`**: `Transport`, `TransportError`.
+- **`src/endpoint.rs`**: `Endpoint`, the poll loop.
+- **`src/uds.rs`**: `UdsTransport` (`std` on Unix).
+- **`examples/`**: Usage examples.
+- **`tests/`**: Integration tests.
 
 ## Build Instructions
 
-This project uses CMake for building.
+```bash
+git clone https://github.com/erguncucuk/embbinder.git
+cd embbinder
+cargo test
+cargo run --example basic_service
+```
 
-### Prerequisites
+For a target with no operating system, disable the default features:
 
-- CMake 3.10 or higher
-- C++17 compatible compiler (GCC, Clang, MSVC)
-
-### Building the Project
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/erguncucuk/embbinder.git
-   cd embbinder
-   ```
-
-2. Create a build directory:
-   ```bash
-   mkdir build && cd build
-   ```
-
-3. Configure and build:
-   ```bash
-   cmake ..
-   make
-   ```
-
-4. Run the tests:
-   ```bash
-   ctest --output-on-failure
-   ```
+```toml
+[dependencies]
+embbinder = { path = "...", default-features = false }
+```
 
 ## Usage
 
-Here is a basic example of how to define a service and invoke its methods.
-
 ### 1. Define a Service
 
-Inherit from `embbinder::core::IService` and implement the `handle` method.
+```rust
+use embbinder::{ErrorCode, Reader, Service, Writer};
 
-```cpp
-#include "embbinder/core/binder.hpp"
-#include "embbinder/core/serializer.hpp"
+struct CalculatorService;
 
-using namespace embbinder::core;
-
-class CalculatorService : public IService {
-public:
-    enum Methods { ADD = 1 };
-
-    void handle(uint32_t method_id, const uint8_t *payload, uint32_t payload_size,
-                uint8_t *response_buf, uint32_t response_capacity,
-                uint32_t &response_size) override {
-        if (method_id != ADD) {
-            return; // response_size stays 0
+impl Service for CalculatorService {
+    fn handle(
+        &mut self,
+        method_id: u32,
+        payload: &[u8],
+        response: &mut [u8],
+    ) -> Result<usize, ErrorCode> {
+        if method_id != 1 {
+            return Err(ErrorCode::MethodNotFound);
         }
+        let mut request = Reader::new(payload);
+        let sum = request.read_i32()?.wrapping_add(request.read_i32()?);
 
-        Serializer req;
-        req.attach_buffer(payload, payload_size);
-        auto a = req.read_int32();
-        auto b = req.read_int32();
-        if (!a.is_ok() || !b.is_ok()) {
-            return;
-        }
-
-        Serializer resp;
-        resp.write_int32(a.value() + b.value());
-        if (resp.size() > response_capacity) {
-            return;
-        }
-        std::memcpy(response_buf, resp.data(), resp.size());
-        response_size = static_cast<uint32_t>(resp.size());
+        let mut writer = Writer::new(response);
+        writer.write_i32(sum)?;
+        Ok(writer.len())
     }
-};
-```
-
-### 2. Register and Use the Service
-
-Initialize the Binder, register your service, and process messages.
-
-```cpp
-int main() {
-    // Initialize Binder
-    Binder &binder = Binder::instance();
-
-    // Register Service
-    CalculatorService calcService;
-    binder.register_service(100, &calcService);
-
-    // Create a Request (Add 10 + 20)
-    Serializer req_payload;
-    req_payload.write_int32(10);
-    req_payload.write_int32(20);
-
-    // Prepare Message Header
-    MessageHeader hdr;
-    hdr.magic = kMagic;
-    hdr.version = kVersion;
-    hdr.type = static_cast<uint16_t>(MsgType::Request);
-    hdr.service_id = 100;
-    hdr.method_id = CalculatorService::ADD;
-    hdr.request_id = 1;
-    hdr.payload_size = static_cast<uint32_t>(req_payload.size());
-
-    // Combine Header and Payload
-    std::vector<uint8_t> message_buffer(sizeof(MessageHeader) + req_payload.size());
-    std::memcpy(message_buffer.data(), &hdr, sizeof(MessageHeader));
-    std::memcpy(message_buffer.data() + sizeof(MessageHeader), req_payload.data(), req_payload.size());
-
-    // Process Message
-    uint8_t response_buffer[256];
-    uint32_t response_size = 0;
-    
-    binder.process_message(message_buffer.data(), message_buffer.size(), 
-                           response_buffer, sizeof(response_buffer), response_size);
-
-    return 0;
 }
 ```
 
-For a complete runnable example, check `examples/basic_service.cpp`.
+`Err` sends a `MsgType::Error` reply to the client.
+
+### 2. Serve Requests
+
+```rust,ignore
+use embbinder::{Binder, Endpoint, UdsTransport};
+
+let mut calculator = CalculatorService;
+let mut binder = Binder::<4>::new(); // at most 4 services
+binder.register_service(100, &mut calculator)?;
+
+// 256 is the maximum message size.
+let mut endpoint = Endpoint::<_, 256>::new(UdsTransport::open("/tmp/calc.sock")?);
+loop {
+    if let Err(code) = endpoint.poll(&mut binder, 1000) {
+        log::warn!("request failed: {code:?}");
+    }
+}
+```
+
+For a complete example, see `examples/basic_service.rs`.
 
 ## License
 

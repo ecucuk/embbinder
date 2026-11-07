@@ -1,50 +1,46 @@
 # System Architecture
 
-EmbBinder is designed with a layered architecture to ensure separation of concerns, portability, and ease of use.
+EmbBinder is one crate with a `no_std` core that needs no heap. One optional module needs `std`.
 
 ```mermaid
-graph TD
-    UserApp[User Application] --> Services[User Services]
-    Services --> |Inherits| IService[IService Interface]
-    UserApp --> Binder[Binder Core]
-    
-    subgraph "Core Layer"
-        Endpoint --> Binder
-        Binder --> |Looks up| Registry[Service Registry]
-    end
-    
-    subgraph "Porting Layer"
-        Endpoint --> Port[Port Interface (OS/HW)]
-    end
-
-    subgraph "Transport"
-        Port --> |Read/Write| TransportDriver[Transport Driver (UART/SPI/TCP)]
-    end
+flowchart LR
+  subgraph core["embbinder (no_std, no heap)"]
+    Endpoint --> Binder
+    Binder --> Slots["[slot; N]"]
+    Endpoint -.-> Transport["trait Transport"]
+    Binder --> Header[MessageHeader]
+    Binder -.-> Service["trait Service"]
+  end
+  subgraph std_feature["feature = std"]
+    UdsTransport -.implements.-> Transport
+  end
+  App --> Endpoint
+  App --> UdsTransport
+  App -.implements.-> Service
 ```
 
 ## Core Components
 
 ### 1. Binder
-The `Binder` class is the main entry point of the library. It is a singleton responsible for:
-- Initializing the system.
-- Managing the service registry.
-- Processing incoming raw data buffers (`process_message`).
-- directing requests to the appropriate service.
+`Binder<'a, N>` is a value that the application owns. It has `N` slots of `(u32, &'a mut dyn Service)`. `process_message` validates a raw message, finds the service with a linear scan and writes the reply. There is no global state and no lock. A multi-threaded application puts the `Binder` in its own mutex.
 
-### 2. Service Registry (`Registry`)
-The `ServiceRegistry` maintains a mapping of Service IDs to Service Instances. It allows for dynamic registration of services at runtime.
+`process_message` gives `Ok(size)` for a response. A failure gives `ProcessError { code, reply_size }`. If `reply_size` is not 0, the output buffer holds an Error reply for the peer.
 
-### 3. IService Interface
-All user services must inherit from `IService`. This interface defines a pure virtual handle method:
-```cpp
-virtual void handle(uint32_t method_id, const uint8_t *payload,
-                    uint32_t payload_size, uint8_t *response_buf,
-                    uint32_t response_capacity, uint32_t &response_size) = 0;
+### 2. Service
+Applications implement this trait:
+```rust
+pub trait Service: Send {
+    fn handle(&mut self, method_id: u32, payload: &[u8], response: &mut [u8])
+        -> Result<usize, ErrorCode>;
+}
 ```
-Services implement this method to deserialize arguments, execute logic, and serialize responses. A service must never write more than `response_capacity` bytes; `Binder` rejects a larger `response_size` with an `Error` message.
+The return value is the number of bytes written to `response`. `Err(code)` gives an Error reply. A size larger than `response` gives an `InternalError` reply.
 
-### 4. Endpoint
-`Endpoint` owns a port `Transport`, reads one message per `poll()`, passes it to `Binder::process_message`, and sends back the response — including `Error` responses for unknown services.
+### 3. Endpoint
+`Endpoint<T, M>` owns a `Transport` and two `[u8; M]` buffers. `poll(&mut binder, timeout_ms)` reads one message, calls `Binder::process_message` and sends the reply, also for Error replies. It gives `Ok(false)` if no message arrived.
 
-### 5. Serializer
-A helper class to safely serialize and deserialize primitive types (int, float, string) and raw buffers into/from a byte stream. It handles endianness (if implemented) and buffer bounds checking.
+### 4. Writer and Reader
+`Writer` writes little-endian values to a `&mut [u8]`. `Reader` reads them from a `&[u8]`. Both check all bounds and give `BufferTooSmall` at the end of the buffer.
+
+### 5. Logging
+The crate logs with the `log` crate. The application installs a logger if it wants the output.

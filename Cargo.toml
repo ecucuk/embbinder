@@ -1,0 +1,14 @@
+[package]
+name = "embbinder"
+version = "0.1.0"
+edition = "2024"
+description = "RPC/binder library for embedded systems"
+license-file = "LICENSE"
+
+[features]
+default = ["std"]
+std = ["dep:libc"]
+
+[dependencies]
+libc = { version = "0.2", optional = true }
+log = { version = "0.4", default-features = false }
