@@ -1,70 +1,41 @@
 # Portability Guide
 
-EmbBinder is designed to be platform-agnostic. The core logic depends only on the standard C++17 library. However, for OS-specific features like threading, synchronization, and timing, it relies on a **Porting Layer**.
+The EmbBinder core needs no operating system and no heap. To run it on a new platform, implement one trait.
 
-## Port Interface
+## Use the crate with no operating system
 
-The porting interface is defined in `include/embbinder/port/port.hpp`. To run EmbBinder on a new platform (e.g., FreeRTOS, Zephyr, bare-metal), you must likely provide implementations for the following abstractions.
-
-*Note: The core Binder logic is mostly synchronous and single-threaded. These porting abstractions are primarily used if you use the optional Transport or Client layers that require blocking waits or background threads.*
-
-### 1. Clock
-```cpp
-struct Clock {
-  static time_ms_t now_ms();
-};
-```
-- **now_ms()**: Returns the current system time in milliseconds.
-
-### 2. Threading (Optional)
-Required only if using background listeners.
-```cpp
-struct Thread {
-  static Result create(ThreadHandle &handle, ThreadEntry entry, void *arg, const ThreadConfig &config);
-  static Result join(ThreadHandle handle);
-  // ...
-};
+```toml
+[dependencies]
+embbinder = { path = "...", default-features = false }
 ```
 
-### 3. Synchronization
-Mutexes and Semaphores for thread safety and blocking operations.
-```cpp
-struct Mutex { ... };
-struct Semaphore { ... };
+CI checks this configuration on `thumbv7em-none-eabihf`.
+
+## Implement a Transport
+
+```rust
+pub trait Transport {
+    fn send(&mut self, data: &[u8], timeout_ms: u64) -> Result<(), TransportError>;
+    fn receive(&mut self, buf: &mut [u8], timeout_ms: u64) -> Result<usize, TransportError>;
+}
 ```
 
-### 4. Transport
-Abstraction for sending and receiving byte streams (UART, socket, etc.).
-```cpp
-struct Transport {
-  static Result open(...);
-  static Result send(..., const uint8_t *data, size_t size, time_ms_t timeout_ms);
-  static Result receive(..., uint8_t *buffer, ...);
-};
-```
+Follow these rules:
 
-### 5. Memory
-Wrappers for `malloc` and `free` (or OS equivalents).
-```cpp
-struct Memory {
-  static void *alloc(size_t size);
-  static void free(void *ptr);
-};
-```
+1. Open the link in your constructor. Close it in `Drop`.
+2. Return `TransportError::Timeout` from `receive` if no message arrived. `Endpoint::poll` then gives `Ok(false)`.
+3. Return exactly one whole message from `receive`.
+4. On a stream link (UART, TCP), read the 24-byte header, then read `payload_size` bytes.
+5. If `payload_size` does not fit in the buffer, drop the connection and return `TransportError::NoMemory`. You cannot resynchronize a stream after this.
 
-### 6. Logging
-```cpp
-struct Logger {
-  static void log(LogLevel level, const char *tag, const char *message);
-};
-```
+## Logging
 
-## How to Port
+The crate uses the `log` crate. To see the output, install a logger for your platform. No logger means no output.
 
-1.  Create a new directory: `src/ports/my_platform/`.
-2.  Implement the functions defined in `embbinder::port` namespace in a `.cpp` file.
-3.  Configure your build system to compile your port file instead of the default/dummy one.
+## Threads and locks
 
-### Example: POSIX Port
+The core does not use threads or locks. If an application shares a `Binder` between threads, it uses the mutex of its platform.
 
-`src/ports/posix/` implements these with `pthread`, `poll` and Unix domain sockets. On Unix it is built as the `embbinder_port_posix` library; link it next to `embbinder_core`. The `Logger` is provided by the core (`src/core/log_port.cpp`), so ports must not define it.
+## Example: UDS
+
+`src/uds.rs` implements `Transport` with Unix domain sockets. It is available with the `std` feature on Unix. Use it as a reference for framing, timeouts and peer loss.

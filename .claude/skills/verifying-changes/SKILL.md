@@ -5,33 +5,26 @@ description: Use when about to report that a change to EmbBinder works, is fixed
 
 # Verifying changes in EmbBinder
 
-Tests are small: `tests/test_binder.cpp` (core) and `tests/test_uds_endpoint.cpp` (Endpoint over the POSIX port). The RTOS port is never compiled.
-
 ## Steps
 
-Use a build dir outside the source tree (in-source builds are rejected):
+Run the same commands as CI:
 
 ```bash
-B=$(mktemp -d)
-cmake -S . -B "$B" -DCMAKE_CXX_FLAGS="-Wall -Wextra" && cmake --build "$B" -j8
-(cd "$B" && ctest --output-on-failure)
-"$B/basic_service"   # last line must be: Client: Result = 30
+cargo test
+cargo clippy --all-targets -- -D warnings
+cargo fmt --check
+cargo build --no-default-features --target thumbv7em-none-eabihf
+cargo run --example basic_service | grep -q "Result = 30"
 ```
 
-The build must produce zero warnings. `src/ports/rtos/` needs FreeRTOS headers and cannot be checked here — say so in your report.
-
-Format check on touched files (must print nothing):
-
-```bash
-clang-format --dry-run <files>
-```
+The `no_std` build needs `rustup target add thumbv7em-none-eabihf` once.
 
 ## When the change has logic
 
-Add a `CHECK` to the matching test file, or a new `tests/test_<area>.cpp` registered with `add_test` in `CMakeLists.txt`. For wire-format code, test a truncated message and a `payload_size` larger than the input.
+Add a test to the matching file in `tests/`. For wire-format code, test a truncated message and a `payload_size` larger than the input. Do not change the golden bytes in `tests/wire_format.rs` to make a test pass.
 
-Prove the test bites: temporarily revert the fix, see the `CHECK` fail, restore.
+Prove the test bites: temporarily revert the fix, see the test fail, restore.
 
 ## Report
 
-State: ctest result, warnings (expected: none), what could not be compiled.
+State: the test result, clippy result, and the `no_std` build result.

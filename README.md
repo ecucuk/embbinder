@@ -1,10 +1,10 @@
 # EmbBinder
 
 [![CI](https://github.com/ecucuk/embbinder/actions/workflows/ci.yml/badge.svg)](https://github.com/ecucuk/embbinder/actions/workflows/ci.yml)
-![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)
+![Rust 2024](https://img.shields.io/badge/rust-2024-blue.svg)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)
 
-A small, transport-agnostic service RPC library for embedded C++, inspired by the Binder-style IPC used in Android and automotive infotainment systems.
+A small, transport-agnostic service RPC library for embedded Rust, inspired by the Binder-style IPC used in Android and automotive infotainment systems.
 
 Services register under a numeric ID. Clients send a request (service ID, method ID, payload). The binder dispatches it to the service and returns a response or a typed error. The same core runs over any byte transport: Unix domain sockets today; RTOS queues and UART are next.
 
@@ -14,109 +14,127 @@ On Linux-based IVI platforms, system services talk to each other through Binder 
 
 - **One service model** for processes on embedded Linux and tasks on an RTOS
 - **A fixed, documented wire format** (24-byte header + payload) that is easy to parse on a small MCU
-- **A porting layer** that keeps OS and transport details out of the core
+- **A `Transport` trait** that keeps OS and transport details out of the core
 
 ## Features
 
-- Service registry with numeric (and string) service IDs
+- `no_std` core with no heap: the application owns the `Binder`, the services and the buffers
+- Service registry with a fixed number of slots and numeric service IDs
 - Request / Response / Event / Error message types
-- Error replies for unknown services and oversized responses; malformed input is dropped
-- Bounds-checked `Serializer` for primitives, strings and raw buffers
+- Error replies for unknown services, service errors and oversized responses; malformed input is dropped
+- Bounds-checked `Writer` and `Reader` over caller buffers; `read_string` returns a `&str` into the payload
 - `Endpoint`: reads one framed message per `poll()`, dispatches it and sends the reply
-- POSIX port: clock, thread, mutex, semaphore, memory, logger and a UDS transport with framing
-- Unit and integration tests; CI on Linux and macOS with `-Werror` and a clang-format check
+- `UdsTransport` (feature `std`, Unix only): Unix domain sockets with framing and send timeouts
+- Integration tests and golden wire bytes; CI on Linux and macOS with `clippy -D warnings`, `rustfmt` and a `thumbv7em-none-eabihf` build
 
 ## Architecture
 
 ```mermaid
 graph TD
-    App[Application] --> Svc[Services implementing IService]
-    App --> Binder
+    App[Application] --> Svc[Services implementing Service]
+    App --> Endpoint
     Endpoint --> Binder
-    Binder --> Registry[Service registry]
-    Endpoint --> Port[Porting layer]
-    Port --> Transport[Transport: UDS / RTOS queue / UART]
+    Binder --> Slots[Service slots]
+    Endpoint --> Transport[Transport trait]
+    Transport --> Impl[UDS / RTOS queue / UART]
 ```
 
-| Layer | Responsibility |
+| File | Responsibility |
 |---|---|
-| `core` | `Binder`, `ServiceRegistry`, `IService`, `Serializer`, `Endpoint` |
-| `port` | OS and transport abstraction (`Clock`, `Thread`, `Mutex`, `Semaphore`, `Memory`, `Logger`, `Transport`) |
-| `utils` | `Span`, `StaticVector`, byte-order helpers |
+| `src/message.rs` | `MessageHeader`, `MsgType`, `MAGIC`, `VERSION` |
+| `src/error.rs` | `ErrorCode` |
+| `src/serializer.rs` | `Writer`, `Reader` |
+| `src/binder.rs` | `Service`, `Binder`, `ProcessError` |
+| `src/transport.rs` | `Transport`, `TransportError` |
+| `src/endpoint.rs` | `Endpoint`, the poll loop |
+| `src/uds.rs` | `UdsTransport` (`std` on Unix) |
 
 Details: [architecture](docs/architecture.md) · [message format](docs/message_format.md) · [porting guide](docs/portability.md)
 
 ## Wire format
 
 ```
-+--------+---------+------+------------+-----------+--------------+------------+---------+
-| magic  | version | type | service_id | method_id | payload_size | request_id | payload |
-| 4 B    | 2 B     | 2 B  | 4 B        | 4 B       | 4 B          | 4 B        | N bytes |
-+--------+---------+------+------------+-----------+--------------+------------+---------+
++--------+---------+----------+------------+-----------+--------------+------------+---------+
+| magic  | version | msg_type | service_id | method_id | payload_size | request_id | payload |
+| 4 B    | 2 B     | 2 B      | 4 B        | 4 B       | 4 B          | 4 B        | N bytes |
++--------+---------+----------+------------+-----------+--------------+------------+---------+
   'EMBB'    1        1=Request 2=Response 3=Event 4=Error
 ```
+
+All fields are little-endian.
 
 ## Quick start
 
 ```bash
 git clone https://github.com/ecucuk/embbinder.git
 cd embbinder
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j
-ctest --test-dir build --output-on-failure
-./build/basic_service
+cargo test
+cargo run --example basic_service
 ```
 
-Requires CMake 3.10+ and a C++17 compiler (GCC, Clang or MSVC).
+For a target with no operating system, disable the default features:
+
+```toml
+[dependencies]
+embbinder = { path = "...", default-features = false }
+```
 
 ## Defining a service
 
-```cpp
-#include "embbinder/core/binder.hpp"
-#include <cstring>
+```rust
+use embbinder::{ErrorCode, Reader, Service, Writer};
 
-using namespace embbinder::core;
+struct CalculatorService;
 
-class CalculatorService : public IService {
-public:
-  enum Method : uint32_t { ADD = 1 };
+impl Service for CalculatorService {
+    fn handle(
+        &mut self,
+        method_id: u32,
+        payload: &[u8],
+        response: &mut [u8],
+    ) -> Result<usize, ErrorCode> {
+        if method_id != 1 {
+            return Err(ErrorCode::MethodNotFound);
+        }
+        let mut request = Reader::new(payload);
+        let sum = request.read_i32()?.wrapping_add(request.read_i32()?);
 
-  void handle(uint32_t method_id, const uint8_t *payload, uint32_t payload_size,
-              uint8_t *response_buf, uint32_t response_capacity,
-              uint32_t &response_size) override {
-    if (method_id != ADD) return;               // no response -> caller sees empty reply
-
-    Serializer req;
-    req.attach_buffer(payload, payload_size);
-    auto a = req.read_int32();
-    auto b = req.read_int32();
-    if (!a.is_ok() || !b.is_ok()) return;       // malformed arguments
-
-    Serializer resp;
-    resp.write_int32(a.value() + b.value());
-    if (resp.size() > response_capacity) return; // never overrun the caller's buffer
-    std::memcpy(response_buf, resp.data(), resp.size());
-    response_size = static_cast<uint32_t>(resp.size());
-  }
-};
-
-int main() {
-  CalculatorService calc;
-  Binder::instance().register_service(100, &calc);
-  // Feed incoming frames to Binder::instance().process_message(...),
-  // or let an Endpoint do it over a transport.
+        let mut writer = Writer::new(response);
+        writer.write_i32(sum)?;
+        Ok(writer.len())
+    }
 }
 ```
 
-A complete client/server round trip is in [`examples/basic_service.cpp`](examples/basic_service.cpp); the UDS endpoint test shows the transport path end to end.
+`Err` sends a `MsgType::Error` reply to the client.
+
+## Serving requests
+
+```rust,ignore
+use embbinder::{Binder, Endpoint, UdsTransport};
+
+let mut calculator = CalculatorService;
+let mut binder = Binder::<4>::new(); // at most 4 services
+binder.register_service(100, &mut calculator)?;
+
+// 256 is the maximum message size.
+let mut endpoint = Endpoint::<_, 256>::new(UdsTransport::open("/tmp/calc.sock")?);
+loop {
+    if let Err(code) = endpoint.poll(&mut binder, 1000) {
+        log::warn!("request failed: {code:?}");
+    }
+}
+```
+
+A complete client/server round trip is in [`examples/basic_service.rs`](examples/basic_service.rs); the UDS endpoint test shows the transport path end to end.
 
 ## Status and roadmap
 
-EmbBinder is an early-stage project. The POSIX path works and is tested; the RTOS side is not there yet. Known limitations, in the order I plan to address them:
+EmbBinder is an early-stage project. The core is allocation-free and the wire encoding is explicit little-endian; the POSIX path works and is tested. Known limitations, in the order I plan to address them:
 
-- [ ] **Allocation-free core.** The registry, `Serializer` and `Endpoint` currently use `std::map`, `std::string`, `std::vector` and `std::mutex`. For MCU targets these will move to fixed-capacity containers (`StaticVector`) and caller-provided buffers, with the mutex behind the porting layer.
-- [ ] **Explicit wire encoding.** The header is copied as a host-endian struct. It will be encoded and decoded field by field in little-endian so mixed-endian peers interoperate.
-- [ ] **FreeRTOS port.** The RTOS queue transport is a compile-only stub today.
+- [x] **Allocation-free core.** `Binder`, `Writer`, `Reader` and `Endpoint` use fixed-capacity slots and caller-provided buffers.
+- [x] **Explicit wire encoding.** The header is encoded and decoded field by field in little-endian.
+- [ ] **RTOS transport** (for example a FreeRTOS queue) through the `Transport` trait.
 - [ ] **UART transport** with frame delimiting and CRC.
 - [ ] **Client proxies.** A small client API (or generated stubs) instead of building headers by hand.
 - [ ] **Footprint numbers** measured on a Cortex-M target.

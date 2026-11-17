@@ -18,7 +18,7 @@ Every message consists of a fixed-size **Header** followed by a variable-length 
 
 ### Header Fields
 
-The header is defined in `embbinder::core::MessageHeader`. All fields are distinct structure members.
+The header is `embbinder::MessageHeader` in `src/message.rs`. All fields are little-endian on the wire.
 
 | Offset | Field        | Size (Bytes) | Description                                      |
 |--------|--------------|--------------|--------------------------------------------------|
@@ -41,12 +41,14 @@ Malformed input (wrong magic, `payload_size` larger than the received bytes) get
 
 ## Framing on stream transports
 
-Stream transports (UDS, TCP, UART) must deliver whole messages: read the 24-byte header, then exactly `payload_size` bytes. The POSIX UDS transport does this and drops the connection when `payload_size` exceeds the receive buffer.
+Stream transports (UDS, TCP, UART) must deliver whole messages: read the 24-byte header, then exactly `payload_size` bytes. `UdsTransport` does this and drops the connection when `payload_size` exceeds the receive buffer.
 
 ## Payload Serialization
 
 The payload contains the arguments for the method (in a Request) or the return values (in a Response).
-Data is serialized sequentially using the `Serializer` class.
+`Writer` writes data sequentially and `Reader` reads it in the same order. All values are little-endian.
+
+A string is a `u32` length and the bytes, with no terminator and no padding. `Reader::read_string` requires valid UTF-8 and gives `DeserializationError` for other bytes.
 
 ### Example
 
@@ -59,4 +61,3 @@ Calling `add(int32_t a, int32_t b)` with `a=10`, `b=20`.
    10          20
  (int32)     (int32)
 ```
-*(Assuming Little Endian)*
